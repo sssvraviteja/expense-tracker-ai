@@ -68,7 +68,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signUp(email: string, password: string) {
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        // Use the current origin so the confirmation link works on localhost
+        // AND on your deployed Vercel URL — no hardcoded URLs needed.
+        emailRedirectTo: `${window.location.origin}/`,
+      },
+    });
     return { error: error?.message ?? null };
   }
 
