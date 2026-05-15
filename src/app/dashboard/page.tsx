@@ -31,6 +31,7 @@ import { ExpenseList } from "@/components/expenses/ExpenseList";
 import { EditExpenseModal } from "@/components/expenses/EditExpenseModal";
 import { useAuth } from "@/providers/AuthProvider";
 import { useExpenses } from "@/hooks/useExpenses";
+import { AIInsightsPanel } from "@/components/expenses/AIInsightsPanel";
 import type { Expense } from "@/types";
 
 export default function DashboardPage() {
@@ -86,6 +87,11 @@ export default function DashboardPage() {
 
         <SummaryCards expenses={expenses} />
         <ExpenseCharts expenses={expenses} />
+
+        {/* AI Analysis section — auto-loads when expenses are available */}
+        <section className="mb-8">
+          <AIInsightsPanel expenses={expenses} />
+        </section>
 
         <div className="grid gap-8 lg:grid-cols-5 lg:items-start">
           <div className="lg:col-span-2">
