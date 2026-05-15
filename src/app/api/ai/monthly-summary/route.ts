@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { GoogleGenerativeAIFetchError } from "@google/generative-ai";
-import { genAI, AI_MODELS } from "@/lib/ai";
+import { getGenAI, MissingApiKeyError, AI_MODELS } from "@/lib/ai";
 import type { MonthlySummaryResponse, AIErrorResponse } from "@/types/ai";
 
 type ExpenseInput = {
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const model = genAI.getGenerativeModel({
+    const model = getGenAI().getGenerativeModel({
       model: AI_MODELS.powerful,
       systemInstruction: SYSTEM_PROMPT,
       generationConfig: {
@@ -128,14 +128,18 @@ export async function POST(req: NextRequest) {
         : [],
     } satisfies MonthlySummaryResponse);
   } catch (err) {
+    if (err instanceof MissingApiKeyError) {
+      console.error("[monthly-summary] GEMINI_API_KEY not set — add it to Vercel environment variables");
+      return Response.json({ error: "AI service not configured" } satisfies AIErrorResponse, { status: 503 });
+    }
     if (err instanceof GoogleGenerativeAIFetchError) {
       if (err.status === 429) {
         console.error("[monthly-summary] Rate limited:", err.message);
         return Response.json({ error: "AI service busy, please try again" } satisfies AIErrorResponse, { status: 429 });
       }
       if (err.status === 401 || err.status === 403) {
-        console.error("[monthly-summary] Auth error — check GEMINI_API_KEY");
-        return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 500 });
+        console.error("[monthly-summary] Auth error — GEMINI_API_KEY is invalid or expired");
+        return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 503 });
       }
       console.error("[monthly-summary] API error:", err.status, err.message);
       return Response.json({ error: "AI service error" } satisfies AIErrorResponse, { status: 500 });
