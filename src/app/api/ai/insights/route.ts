@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { GoogleGenerativeAIFetchError } from "@google/generative-ai";
-import { genAI, AI_MODELS } from "@/lib/ai";
+import { getGenAI, MissingApiKeyError, AI_MODELS } from "@/lib/ai";
+import { cacheGet, cacheSet, cacheKey } from "@/lib/ai-cache";
 import type { Insight, InsightsResponse, AIErrorResponse } from "@/types/ai";
 
 type ExpenseInput = {
@@ -93,6 +94,10 @@ export async function POST(req: NextRequest) {
     } satisfies InsightsResponse);
   }
 
+  const key = cacheKey("insights", expenses);
+  const cached = cacheGet<InsightsResponse>(key);
+  if (cached) return Response.json(cached);
+
   const agg = aggregateExpenses(expenses);
   const months = Object.keys(agg.byMonth).sort();
   const avgMonthlySpend = months.length > 0
@@ -110,7 +115,7 @@ export async function POST(req: NextRequest) {
   };
 
   try {
-    const model = genAI.getGenerativeModel({
+    const model = getGenAI().getGenerativeModel({
       model: AI_MODELS.powerful,
       systemInstruction: SYSTEM_PROMPT,
       generationConfig: {
@@ -146,21 +151,27 @@ export async function POST(req: NextRequest) {
         ? parsed.topCategory
         : Object.entries(agg.byCategory).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Unknown";
 
-    return Response.json({
+    const response: InsightsResponse = {
       insights,
       topCategory,
       totalSpent: agg.totalSpent,
       avgMonthlySpend,
-    } satisfies InsightsResponse);
+    };
+    cacheSet(key, response);
+    return Response.json(response satisfies InsightsResponse);
   } catch (err) {
+    if (err instanceof MissingApiKeyError) {
+      console.error("[insights] GEMINI_API_KEY not set — add it to Vercel environment variables");
+      return Response.json({ error: "AI service not configured" } satisfies AIErrorResponse, { status: 503 });
+    }
     if (err instanceof GoogleGenerativeAIFetchError) {
       if (err.status === 429) {
         console.error("[insights] Rate limited:", err.message);
         return Response.json({ error: "AI service busy, please try again" } satisfies AIErrorResponse, { status: 429 });
       }
       if (err.status === 401 || err.status === 403) {
-        console.error("[insights] Auth error — check GEMINI_API_KEY");
-        return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 500 });
+        console.error("[insights] Auth error — GEMINI_API_KEY is invalid or expired");
+        return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 503 });
       }
       console.error("[insights] API error:", err.status, err.message);
       return Response.json({ error: "AI service error" } satisfies AIErrorResponse, { status: 500 });
