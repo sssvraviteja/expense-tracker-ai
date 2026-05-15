@@ -1,42 +1,6 @@
-/**
- * POST /api/ai/monthly-summary
- *
- * NARRATIVE GENERATION (teach):
- * ──────────────────────────────
- * This endpoint generates a human-readable financial narrative — the kind
- * a smart friend who's also a CFO would give you at end of month.
- *
- * The key difference vs. /insights:
- * - /insights → structured JSON, card-based UI, scannable
- * - /monthly-summary → natural language prose, story-like, emotional resonance
- *
- * Both patterns are valuable in AI-native products. Use structured JSON when
- * users need to scan/act on data. Use narrative when you want users to
- * understand and feel the story behind their numbers.
- *
- * MULTI-MONTH COMPARISON (teach):
- * ──────────────────────────────────
- * We pass both the current month and previous month data. Claude can then
- * make concrete comparisons ("you spent 24% more on food this month").
- * This is much more valuable than single-period analysis.
- *
- * FUTURE AGENTIC EVOLUTION (teach):
- * ────────────────────────────────────
- * Right now: user triggers → single AI call → static result.
- *
- * In a more agentic architecture, this could become:
- * 1. Agent detects it's month-end → automatically triggers summary
- * 2. Agent compares to user's stated budget goals (stored in memory)
- * 3. Agent sends a push notification with the narrative
- * 4. If overspending detected → agent pro-actively suggests corrections
- *
- * The route handler you write today becomes a "tool" in that future agent.
- * Write it with that in mind: clean inputs, clean outputs, no side effects.
- */
-
 import { NextRequest } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
-import { anthropic, AI_MODELS } from "@/lib/ai";
+import { GoogleGenerativeAIFetchError } from "@google/generative-ai";
+import { genAI, AI_MODELS } from "@/lib/ai";
 import type { MonthlySummaryResponse, AIErrorResponse } from "@/types/ai";
 
 type ExpenseInput = {
@@ -80,11 +44,9 @@ Return ONLY this JSON structure (no markdown, no explanation):
 }
 
 Tone: friendly, direct, specific. Like a smart friend reviewing your finances — not a bank bot.
-Examples of good narrative: "You spent ₹12,450 in December, up 18% from November. Food was your biggest category at ₹4,200 — mostly weekend dining. A solid month overall, with travel spending down significantly."
 Do NOT: give generic advice, repeat the same point twice, use vague language.`;
 
 export async function POST(req: NextRequest) {
-  // ── 1. Input validation ────────────────────────────────────────────────────
   let expenses: ExpenseInput[];
   let targetMonth: string | undefined;
 
@@ -107,13 +69,11 @@ export async function POST(req: NextRequest) {
     } satisfies MonthlySummaryResponse);
   }
 
-  // ── 2. Determine target month (default: most recent) ──────────────────────
   const allMonths = [...new Set(expenses.map((e) => e.date.slice(0, 7)))].sort();
   const currentMonth = targetMonth ?? allMonths[allMonths.length - 1] ?? "";
   const prevMonthIdx = allMonths.indexOf(currentMonth) - 1;
   const prevMonth = prevMonthIdx >= 0 ? allMonths[prevMonthIdx] : null;
 
-  // ── 3. Build compact prompt payload ───────────────────────────────────────
   const currentData = summarizeMonth(filterByMonth(expenses, currentMonth));
   const prevData = prevMonth ? summarizeMonth(filterByMonth(expenses, prevMonth)) : null;
 
@@ -132,44 +92,32 @@ export async function POST(req: NextRequest) {
       totalSpent: prevData.total,
       byCategory: prevData.byCategory,
     };
-    // Pre-compute % change to reduce reasoning load
     const change = prevData.total > 0
       ? Math.round(((currentData.total - prevData.total) / prevData.total) * 100)
       : null;
     if (change !== null) dataForAI.monthOverMonthChange = `${change > 0 ? "+" : ""}${change}%`;
   }
 
-  // ── 4. Claude API call ─────────────────────────────────────────────────────
   try {
-    const response = await anthropic.messages.create({
-      model: AI_MODELS.powerful, // claude-opus-4-7: narrative quality matters here
-      max_tokens: 1024,
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
-        },
-      ] as Anthropic.TextBlockParam[],
-      messages: [
-        {
-          role: "user",
-          content: `Write a monthly summary for this data:\n\n${JSON.stringify(dataForAI, null, 2)}`,
-        },
-      ],
+    const model = genAI.getGenerativeModel({
+      model: AI_MODELS.powerful,
+      systemInstruction: SYSTEM_PROMPT,
+      generationConfig: {
+        responseMimeType: "application/json",
+        maxOutputTokens: 1024,
+      },
     });
 
-    // ── 5. Parse response ────────────────────────────────────────────────────
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      throw new Error("No text block in response");
-    }
+    const result = await model.generateContent(
+      `Write a monthly summary for this data:\n\n${JSON.stringify(dataForAI, null, 2)}`
+    );
+    const text = result.response.text();
 
     let parsed: Partial<MonthlySummaryResponse>;
     try {
-      parsed = JSON.parse(textBlock.text);
+      parsed = JSON.parse(text);
     } catch {
-      throw new Error(`Model returned non-JSON: ${textBlock.text.slice(0, 200)}`);
+      throw new Error(`Model returned non-JSON: ${text.slice(0, 200)}`);
     }
 
     return Response.json({
@@ -180,19 +128,18 @@ export async function POST(req: NextRequest) {
         : [],
     } satisfies MonthlySummaryResponse);
   } catch (err) {
-    if (err instanceof Anthropic.RateLimitError) {
-      console.error("[monthly-summary] Rate limited:", err.message);
-      return Response.json({ error: "AI service busy, please try again" } satisfies AIErrorResponse, { status: 429 });
-    }
-    if (err instanceof Anthropic.AuthenticationError) {
-      console.error("[monthly-summary] Auth error — check ANTHROPIC_API_KEY");
-      return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 500 });
-    }
-    if (err instanceof Anthropic.APIError) {
+    if (err instanceof GoogleGenerativeAIFetchError) {
+      if (err.status === 429) {
+        console.error("[monthly-summary] Rate limited:", err.message);
+        return Response.json({ error: "AI service busy, please try again" } satisfies AIErrorResponse, { status: 429 });
+      }
+      if (err.status === 401 || err.status === 403) {
+        console.error("[monthly-summary] Auth error — check GEMINI_API_KEY");
+        return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 500 });
+      }
       console.error("[monthly-summary] API error:", err.status, err.message);
       return Response.json({ error: "AI service error" } satisfies AIErrorResponse, { status: 500 });
     }
-
     console.error("[monthly-summary] Unexpected error:", err);
     return Response.json({ error: "Failed to generate summary" } satisfies AIErrorResponse, { status: 500 });
   }

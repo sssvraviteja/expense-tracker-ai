@@ -1,49 +1,13 @@
-/**
- * POST /api/ai/insights
- *
- * ORCHESTRATION ARCHITECTURE (teach):
- * ─────────────────────────────────────
- * This route is an "AI workflow" — not just a single API call, but a
- * pipeline: aggregate data → build prompt → call Claude → parse/validate.
- *
- * We pre-aggregate the expense data BEFORE sending it to Claude.
- * Why? Because 200 raw expense rows is ~3,000 tokens. But the same data
- * as aggregated summaries is ~300 tokens. 10x token reduction, same insights.
- *
- * This is a core AI engineering principle: give the model the RIGHT
- * representation of data, not the raw data. The model's reasoning is better
- * when the input is already structured for the task.
- *
- * ADAPTIVE THINKING (teach):
- * ────────────────────────────
- * We use claude-opus-4-7 with thinking: {type: "adaptive"}.
- * Adaptive thinking lets Claude decide how much to "think" based on query
- * complexity. Financial pattern analysis benefits from deeper reasoning —
- * spotting non-obvious correlations, comparing periods, generating useful
- * suggestions (not generic ones).
- *
- * Without thinking: Claude gives surface-level observations.
- * With adaptive thinking: Claude reasons about spending trajectories,
- * compares categories to budgeting benchmarks, spots seasonal patterns.
- *
- * SCALABILITY CONSIDERATION:
- * This endpoint is called manually (user clicks "Analyze"). Budget accordingly:
- * - Haiku: not appropriate (needs reasoning depth)
- * - Sonnet: good balance
- * - Opus: best insights (what we use here)
- * - Cost: ~$0.002 per insights call with prompt caching
- */
-
 import { NextRequest } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
-import { anthropic, AI_MODELS } from "@/lib/ai";
+import { GoogleGenerativeAIFetchError } from "@google/generative-ai";
+import { genAI, AI_MODELS } from "@/lib/ai";
 import type { Insight, InsightsResponse, AIErrorResponse } from "@/types/ai";
 
 type ExpenseInput = {
   amount: number;
   description: string;
   category: string;
-  date: string; // YYYY-MM-DD
+  date: string;
 };
 
 type AggregatedData = {
@@ -62,7 +26,7 @@ function aggregateExpenses(expenses: ExpenseInput[]): AggregatedData {
 
   for (const e of expenses) {
     byCategory[e.category] = (byCategory[e.category] ?? 0) + e.amount;
-    const month = e.date.slice(0, 7); // YYYY-MM
+    const month = e.date.slice(0, 7);
     byMonth[month] = (byMonth[month] ?? 0) + e.amount;
     descriptionCounts[e.description] = (descriptionCounts[e.description] ?? 0) + 1;
   }
@@ -109,7 +73,6 @@ Guidelines:
 - All amounts are in Indian Rupees (₹)`;
 
 export async function POST(req: NextRequest) {
-  // ── 1. Input validation ────────────────────────────────────────────────────
   let expenses: ExpenseInput[];
   try {
     const body = await req.json();
@@ -130,14 +93,12 @@ export async function POST(req: NextRequest) {
     } satisfies InsightsResponse);
   }
 
-  // ── 2. Pre-aggregate data (token optimization) ─────────────────────────────
   const agg = aggregateExpenses(expenses);
   const months = Object.keys(agg.byMonth).sort();
   const avgMonthlySpend = months.length > 0
     ? Math.round((agg.totalSpent / months.length) * 100) / 100
     : agg.totalSpent;
 
-  // Build a compact, high-signal representation for the model
   const dataForAI = {
     totalSpent: agg.totalSpent,
     expenseCount: agg.expenseCount,
@@ -148,40 +109,28 @@ export async function POST(req: NextRequest) {
     period: months.length > 0 ? `${months[0]} to ${months[months.length - 1]}` : "unknown",
   };
 
-  // ── 3. Claude API call ─────────────────────────────────────────────────────
   try {
-    const response = await anthropic.messages.create({
-      model: AI_MODELS.powerful, // claude-opus-4-7: complex financial reasoning
-      max_tokens: 2048,
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" }, // Stable system prompt — cache it
-        },
-      ] as Anthropic.TextBlockParam[],
-      messages: [
-        {
-          role: "user",
-          content: `Analyze this expense data and return insights:\n\n${JSON.stringify(dataForAI, null, 2)}`,
-        },
-      ],
+    const model = genAI.getGenerativeModel({
+      model: AI_MODELS.powerful,
+      systemInstruction: SYSTEM_PROMPT,
+      generationConfig: {
+        responseMimeType: "application/json",
+        maxOutputTokens: 2048,
+      },
     });
 
-    // ── 4. Parse response ────────────────────────────────────────────────────
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      throw new Error("No text block in response");
-    }
+    const result = await model.generateContent(
+      `Analyze this expense data and return insights:\n\n${JSON.stringify(dataForAI, null, 2)}`
+    );
+    const text = result.response.text();
 
     let parsed: Partial<InsightsResponse>;
     try {
-      parsed = JSON.parse(textBlock.text);
+      parsed = JSON.parse(text);
     } catch {
-      throw new Error(`Model returned non-JSON: ${textBlock.text.slice(0, 200)}`);
+      throw new Error(`Model returned non-JSON: ${text.slice(0, 200)}`);
     }
 
-    // Validate and sanitize the parsed response
     const insights: Insight[] = Array.isArray(parsed.insights)
       ? parsed.insights.filter(
           (i): i is Insight =>
@@ -204,19 +153,18 @@ export async function POST(req: NextRequest) {
       avgMonthlySpend,
     } satisfies InsightsResponse);
   } catch (err) {
-    if (err instanceof Anthropic.RateLimitError) {
-      console.error("[insights] Rate limited:", err.message);
-      return Response.json({ error: "AI service busy, please try again" } satisfies AIErrorResponse, { status: 429 });
-    }
-    if (err instanceof Anthropic.AuthenticationError) {
-      console.error("[insights] Auth error — check ANTHROPIC_API_KEY");
-      return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 500 });
-    }
-    if (err instanceof Anthropic.APIError) {
+    if (err instanceof GoogleGenerativeAIFetchError) {
+      if (err.status === 429) {
+        console.error("[insights] Rate limited:", err.message);
+        return Response.json({ error: "AI service busy, please try again" } satisfies AIErrorResponse, { status: 429 });
+      }
+      if (err.status === 401 || err.status === 403) {
+        console.error("[insights] Auth error — check GEMINI_API_KEY");
+        return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 500 });
+      }
       console.error("[insights] API error:", err.status, err.message);
       return Response.json({ error: "AI service error" } satisfies AIErrorResponse, { status: 500 });
     }
-
     console.error("[insights] Unexpected error:", err);
     return Response.json({ error: "Failed to generate insights" } satisfies AIErrorResponse, { status: 500 });
   }
