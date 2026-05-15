@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { IndianRupee } from "lucide-react";
+import { useRef, useState } from "react";
+import { IndianRupee, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CATEGORY_OPTIONS } from "@/types";
 import type { AddExpenseInput } from "@/hooks/useExpenses";
+import { useCategorize } from "@/hooks/useAI";
 
 function getTodayIsoDate() {
   const t = new Date();
@@ -24,6 +25,27 @@ export function AddExpenseForm({ onAdd, disabled }: Props) {
   const [category, setCategory] = useState<string>(CATEGORY_OPTIONS[0]);
   const [date, setDate] = useState(getTodayIsoDate);
   const [saving, setSaving] = useState(false);
+  const [aiCategorized, setAiCategorized] = useState(false);
+
+  const { categorize, loading: aiLoading } = useCategorize();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleDescriptionChange(value: string) {
+    setDescription(value);
+    setAiCategorized(false);
+
+    // Debounce: auto-categorize 600ms after user stops typing
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (value.trim().length >= 2) {
+      debounceRef.current = setTimeout(async () => {
+        const suggested = await categorize(value.trim());
+        if (suggested && CATEGORY_OPTIONS.includes(suggested as typeof CATEGORY_OPTIONS[number])) {
+          setCategory(suggested);
+          setAiCategorized(true);
+        }
+      }, 600);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -44,6 +66,7 @@ export function AddExpenseForm({ onAdd, disabled }: Props) {
       setDescription("");
       setCategory(CATEGORY_OPTIONS[0]);
       setDate(getTodayIsoDate());
+      setAiCategorized(false);
     }
   }
 
@@ -68,13 +91,28 @@ export function AddExpenseForm({ onAdd, disabled }: Props) {
 
           <div className="space-y-1.5">
             <label htmlFor="description" className="text-sm font-medium">Description</label>
-            <Input id="description" type="text" placeholder="What did you pay for?"
-              value={description} onChange={e => setDescription(e.target.value)} className="h-10" />
+            <div className="relative">
+              <Input id="description" type="text" placeholder="What did you pay for?"
+                value={description} onChange={e => handleDescriptionChange(e.target.value)} className="h-10 pr-8" />
+              {aiLoading && (
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                  <span className="size-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin block" />
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="category" className="text-sm font-medium">Category</label>
-            <select id="category" value={category} onChange={e => setCategory(e.target.value)}
+            <div className="flex items-center justify-between">
+              <label htmlFor="category" className="text-sm font-medium">Category</label>
+              {aiCategorized && (
+                <span className="flex items-center gap-1 text-xs text-purple-400">
+                  <Sparkles className="size-3" />AI suggested
+                </span>
+              )}
+            </div>
+            <select id="category" value={category}
+              onChange={e => { setCategory(e.target.value); setAiCategorized(false); }}
               className="h-10 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30">
               {CATEGORY_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
             </select>
