@@ -134,13 +134,13 @@ export async function POST(req: NextRequest) {
         return Response.json({ error: "AI service busy, please try again" } satisfies AIErrorResponse, { status: 429 });
       }
       if (err.status === 401 || err.status === 403) {
-        console.error("[monthly-summary] Auth error — check GEMINI_API_KEY");
+        console.error("[monthly-summary] Auth error:", err.status, err.message);
         return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 500 });
       }
       console.error("[monthly-summary] API error:", err.status, err.message);
       return Response.json({ error: "AI service error" } satisfies AIErrorResponse, { status: 500 });
     }
-    console.error("[monthly-summary] Unexpected error:", err);
+    console.error("[monthly-summary] Unexpected error:", String(err));
     return Response.json({ error: "Failed to generate summary" } satisfies AIErrorResponse, { status: 500 });
   }
 }

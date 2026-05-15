@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
         return Response.json({ error: "AI service busy, please try again" } satisfies AIErrorResponse, { status: 429 });
       }
       if (err.status === 401 || err.status === 403) {
-        console.error("[categorize] Auth error — check GEMINI_API_KEY");
+        console.error("[categorize] Auth error:", err.status, err.message);
         return Response.json({ error: "AI service misconfigured" } satisfies AIErrorResponse, { status: 500 });
       }
       console.error("[categorize] API error:", err.status, err.message);
