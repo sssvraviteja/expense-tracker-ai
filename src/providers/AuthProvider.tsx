@@ -74,7 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       options: {
         // Use the current origin so the confirmation link works on localhost
         // AND on your deployed Vercel URL — no hardcoded URLs needed.
-        emailRedirectTo: `${window.location.origin}/`,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
     return { error: error?.message ?? null };
