@@ -144,7 +144,6 @@ export async function POST(req: NextRequest) {
     const response = await anthropic.messages.create({
       model: AI_MODELS.powerful, // claude-opus-4-7: narrative quality matters here
       max_tokens: 1024,
-      thinking: { type: "adaptive" },
       system: [
         {
           type: "text",
