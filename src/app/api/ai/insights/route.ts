@@ -153,7 +153,6 @@ export async function POST(req: NextRequest) {
     const response = await anthropic.messages.create({
       model: AI_MODELS.powerful, // claude-opus-4-7: complex financial reasoning
       max_tokens: 2048,
-      thinking: { type: "enabled", budget_tokens: 1024 },
       system: [
         {
           type: "text",

@@ -53,7 +53,7 @@ export const anthropic = new Anthropic({
 
 export const AI_MODELS = {
   /** Fast, cheap classification. ~$1/1M input tokens. */
-  fast: "claude-haiku-4-5" as const,
+  fast: "claude-haiku-4-5-20251001" as const,
   /** Most capable. Complex reasoning + narrative. ~$5/1M input tokens. */
   powerful: "claude-opus-4-7" as const,
 } as const;
