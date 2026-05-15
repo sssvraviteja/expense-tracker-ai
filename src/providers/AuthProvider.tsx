@@ -68,13 +68,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signUp(email: string, password: string) {
+    // NEXT_PUBLIC_SITE_URL must be set to the production URL in Vercel env vars.
+    // It takes priority over window.location.origin so emails always redirect to
+    // the correct domain even when the signup is tested from a local dev server.
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? window.location.origin;
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        // Use the current origin so the confirmation link works on localhost
-        // AND on your deployed Vercel URL — no hardcoded URLs needed.
-        emailRedirectTo: `${window.location.origin}/`,
+        emailRedirectTo: `${siteUrl}/`,
       },
     });
     return { error: error?.message ?? null };
