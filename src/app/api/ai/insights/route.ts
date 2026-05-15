@@ -151,14 +151,14 @@ export async function POST(req: NextRequest) {
         ? parsed.topCategory
         : Object.entries(agg.byCategory).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Unknown";
 
-    const result: InsightsResponse = {
+    const response: InsightsResponse = {
       insights,
       topCategory,
       totalSpent: agg.totalSpent,
       avgMonthlySpend,
     };
-    cacheSet(key, result);
-    return Response.json(result satisfies InsightsResponse);
+    cacheSet(key, response);
+    return Response.json(response satisfies InsightsResponse);
   } catch (err) {
     if (err instanceof MissingApiKeyError) {
       console.error("[insights] GEMINI_API_KEY not set — add it to Vercel environment variables");
